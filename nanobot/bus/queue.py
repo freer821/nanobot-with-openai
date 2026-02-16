@@ -48,6 +48,25 @@ class MessageBus:
             self._outbound_subscribers[channel] = []
         self._outbound_subscribers[channel].append(callback)
     
+    def unsubscribe_outbound(
+        self,
+        channel: str,
+        callback: Callable[[OutboundMessage], Awaitable[None]]
+    ) -> None:
+        """Unsubscribe from outbound messages for a specific channel."""
+        if channel in self._outbound_subscribers:
+            try:
+                self._outbound_subscribers[channel].remove(callback)
+            except ValueError:
+                pass
+    
+    def clear_subscribers(self, channel: str | None = None) -> None:
+        """Clear subscribers for a specific channel, or all if channel is None."""
+        if channel is None:
+            self._outbound_subscribers.clear()
+        elif channel in self._outbound_subscribers:
+            self._outbound_subscribers[channel].clear()
+    
     async def dispatch_outbound(self) -> None:
         """
         Dispatch outbound messages to subscribed channels.

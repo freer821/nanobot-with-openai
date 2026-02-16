@@ -187,24 +187,28 @@ class TelegramChannel(BaseChannel):
         # Stop typing indicator for this chat
         self._stop_typing(msg.chat_id)
         
+        if not msg.chat_id:
+            logger.error("Cannot send message: chat_id is empty")
+            return
+        
         try:
-            # chat_id should be the Telegram chat ID (integer)
             chat_id = int(msg.chat_id)
-            # Convert markdown to Telegram HTML
+        except ValueError:
+            logger.error(f"Invalid chat_id: {msg.chat_id}")
+            return
+        
+        try:
             html_content = _markdown_to_telegram_html(msg.content)
             await self._app.bot.send_message(
                 chat_id=chat_id,
                 text=html_content,
                 parse_mode="HTML"
             )
-        except ValueError:
-            logger.error(f"Invalid chat_id: {msg.chat_id}")
         except Exception as e:
-            # Fallback to plain text if HTML parsing fails
             logger.warning(f"HTML parse failed, falling back to plain text: {e}")
             try:
                 await self._app.bot.send_message(
-                    chat_id=int(msg.chat_id),
+                    chat_id=chat_id,
                     text=msg.content
                 )
             except Exception as e2:

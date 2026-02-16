@@ -12,6 +12,13 @@ from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nanobot.providers.registry import find_by_model, find_gateway
 
 
+class LLMError(Exception):
+    """Exception raised when LLM call fails."""
+    def __init__(self, message: str, error_type: str = "unknown"):
+        super().__init__(message)
+        self.error_type = error_type
+
+
 class LiteLLMProvider(LLMProvider):
     """
     LLM provider using LiteLLM for multi-provider support.
@@ -156,12 +163,16 @@ class LiteLLMProvider(LLMProvider):
         try:
             response = await acompletion(**kwargs)
             return self._parse_response(response)
+        except litellm.AuthenticationError as e:
+            raise LLMError(f"Authentication failed: {str(e)}", error_type="auth") from e
+        except litellm.RateLimitError as e:
+            raise LLMError(f"Rate limit exceeded: {str(e)}", error_type="rate_limit") from e
+        except litellm.BadRequestError as e:
+            raise LLMError(f"Bad request: {str(e)}", error_type="bad_request") from e
+        except litellm.Timeout as e:
+            raise LLMError(f"Request timeout: {str(e)}", error_type="timeout") from e
         except Exception as e:
-            # Return error as content for graceful handling
-            return LLMResponse(
-                content=f"Error calling LLM: {str(e)}",
-                finish_reason="error",
-            )
+            raise LLMError(f"LLM call failed: {str(e)}", error_type="unknown") from e
     
     def _parse_response(self, response: Any) -> LLMResponse:
         """Parse LiteLLM response into our standard format."""

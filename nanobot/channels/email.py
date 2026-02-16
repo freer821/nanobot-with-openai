@@ -1,5 +1,6 @@
 """Email channel implementation using IMAP polling + SMTP replies."""
 
+from collections import OrderedDict
 import asyncio
 import html
 import imaplib
@@ -55,7 +56,7 @@ class EmailChannel(BaseChannel):
         self.config: EmailConfig = config
         self._last_subject_by_chat: dict[str, str] = {}
         self._last_message_id_by_chat: dict[str, str] = {}
-        self._processed_uids: set[str] = set()  # Capped to prevent unbounded growth
+        self._processed_uids: OrderedDict[str, float] = OrderedDict()
         self._MAX_PROCESSED_UIDS = 100000
 
     async def start(self) -> None:
@@ -301,10 +302,12 @@ class EmailChannel(BaseChannel):
                 )
 
                 if dedupe and uid:
-                    self._processed_uids.add(uid)
-                    # mark_seen is the primary dedup; this set is a safety net
+                    now = asyncio.get_event_loop().time()
+                    self._processed_uids[uid] = now
                     if len(self._processed_uids) > self._MAX_PROCESSED_UIDS:
-                        self._processed_uids.clear()
+                        oldest_keys = list(self._processed_uids.keys())[:self._MAX_PROCESSED_UIDS // 10]
+                        for key in oldest_keys:
+                            del self._processed_uids[key]
 
                 if mark_seen:
                     client.store(imap_id, "+FLAGS", "\\Seen")

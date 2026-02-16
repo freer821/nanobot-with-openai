@@ -1,6 +1,8 @@
 """Session management for conversation history."""
 
+import asyncio
 import json
+import threading
 from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -63,15 +65,57 @@ class SessionManager:
         self.workspace = workspace
         self.sessions_dir = ensure_dir(Path.home() / ".nanobot" / "sessions")
         self._cache: dict[str, Session] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._global_lock = asyncio.Lock()
+        self._write_locks: dict[str, threading.Lock] = {}
+        self._write_locks_guard = threading.Lock()
+    
+    def _get_write_lock(self, key: str) -> threading.Lock:
+        """Get or create a write lock for a session."""
+        with self._write_locks_guard:
+            if key not in self._write_locks:
+                self._write_locks[key] = threading.Lock()
+            return self._write_locks[key]
     
     def _get_session_path(self, key: str) -> Path:
         """Get the file path for a session."""
         safe_key = safe_filename(key.replace(":", "_"))
         return self.sessions_dir / f"{safe_key}.jsonl"
     
+    async def get_or_create_async(self, key: str) -> Session:
+        """
+        Get an existing session or create a new one (async version with locking).
+        
+        Args:
+            key: Session key (usually channel:chat_id).
+        
+        Returns:
+            The session.
+        """
+        if key in self._cache:
+            return self._cache[key]
+        
+        async with self._global_lock:
+            if key not in self._locks:
+                self._locks[key] = asyncio.Lock()
+        
+        async with self._locks[key]:
+            if key in self._cache:
+                return self._cache[key]
+            
+            session = self._load(key)
+            if session is None:
+                session = Session(key=key)
+            
+            self._cache[key] = session
+            return session
+    
     def get_or_create(self, key: str) -> Session:
         """
         Get an existing session or create a new one.
+        
+        Note: This is a synchronous version. For concurrent access, 
+        use get_or_create_async() with proper locking.
         
         Args:
             key: Session key (usually channel:chat_id).
@@ -129,22 +173,24 @@ class SessionManager:
             return None
     
     def save(self, session: Session) -> None:
-        """Save a session to disk."""
-        path = self._get_session_path(session.key)
+        """Save a session to disk with write lock protection."""
+        write_lock = self._get_write_lock(session.key)
+        with write_lock:
+            path = self._get_session_path(session.key)
 
-        with open(path, "w") as f:
-            metadata_line = {
-                "_type": "metadata",
-                "created_at": session.created_at.isoformat(),
-                "updated_at": session.updated_at.isoformat(),
-                "metadata": session.metadata,
-                "last_consolidated": session.last_consolidated
-            }
-            f.write(json.dumps(metadata_line) + "\n")
-            for msg in session.messages:
-                f.write(json.dumps(msg) + "\n")
+            with open(path, "w") as f:
+                metadata_line = {
+                    "_type": "metadata",
+                    "created_at": session.created_at.isoformat(),
+                    "updated_at": session.updated_at.isoformat(),
+                    "metadata": session.metadata,
+                    "last_consolidated": session.last_consolidated
+                }
+                f.write(json.dumps(metadata_line) + "\n")
+                for msg in session.messages:
+                    f.write(json.dumps(msg) + "\n")
 
-        self._cache[session.key] = session
+            self._cache[session.key] = session
     
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""

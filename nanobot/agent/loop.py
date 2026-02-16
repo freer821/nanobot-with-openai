@@ -123,14 +123,40 @@ class AgentLoop:
             self.tools.register(CronTool(self.cron_service))
     
     async def _connect_mcp(self) -> None:
-        """Connect to configured MCP servers (one-time, lazy)."""
-        if self._mcp_connected or not self._mcp_servers:
+        """Connect to configured MCP servers with reconnection support."""
+        if not self._mcp_servers:
             return
+        
+        if self._mcp_connected:
+            await self._reconnect_mcp()
+            return
+        
         self._mcp_connected = True
         from nanobot.agent.tools.mcp import connect_mcp_servers
         self._mcp_stack = AsyncExitStack()
         await self._mcp_stack.__aenter__()
         await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
+    
+    async def _reconnect_mcp(self) -> None:
+        """Reconnect to MCP servers if connection is lost."""
+        if not self._mcp_servers:
+            return
+        
+        from nanobot.agent.tools.mcp import connect_mcp_servers
+        try:
+            if self._mcp_stack:
+                await self._mcp_stack.__aexit__(None, None, None)
+        except Exception:
+            pass
+        
+        self._mcp_stack = AsyncExitStack()
+        await self._mcp_stack.__aenter__()
+        try:
+            await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
+            logger.info("MCP reconnection successful")
+        except Exception as e:
+            logger.warning(f"MCP reconnection failed: {e}")
+            self._mcp_connected = False
 
     def _set_tool_context(self, channel: str, chat_id: str) -> None:
         """Update context for all tools that need routing info."""
@@ -156,6 +182,8 @@ class AgentLoop:
         Returns:
             Tuple of (final_content, list_of_tools_used).
         """
+        from nanobot.providers.litellm_provider import LLMError
+        
         messages = initial_messages
         iteration = 0
         final_content = None
@@ -164,13 +192,17 @@ class AgentLoop:
         while iteration < self.max_iterations:
             iteration += 1
 
-            response = await self.provider.chat(
-                messages=messages,
-                tools=self.tools.get_definitions(),
-                model=self.model,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-            )
+            try:
+                response = await self.provider.chat(
+                    messages=messages,
+                    tools=self.tools.get_definitions(),
+                    model=self.model,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                )
+            except LLMError as e:
+                logger.error(f"LLM error: {e.error_type} - {str(e)}")
+                return f"Error: {str(e)}", tools_used
 
             if response.has_tool_calls:
                 tool_call_dicts = [
@@ -268,26 +300,38 @@ class AgentLoop:
         # Handle slash commands
         cmd = msg.content.strip().lower()
         if cmd == "/new":
-            # Capture messages before clearing (avoid race condition with background task)
             messages_to_archive = session.messages.copy()
             session.clear()
             self.sessions.save(session)
             self.sessions.invalidate(session.key)
 
-            async def _consolidate_and_cleanup():
-                temp_session = Session(key=session.key)
-                temp_session.messages = messages_to_archive
-                await self._consolidate_memory(temp_session, archive_all=True)
+            try:
+                await asyncio.wait_for(
+                    self._consolidate_memory(session, archive_all=True),
+                    timeout=60.0
+                )
+                content = "New session started. Memory consolidation completed."
+            except asyncio.TimeoutError:
+                logger.warning("Memory consolidation timed out for /new command")
+                content = "New session started. Memory consolidation timed out."
+            except Exception as e:
+                logger.error(f"Memory consolidation failed: {e}")
+                content = "New session started. Memory consolidation failed."
 
-            asyncio.create_task(_consolidate_and_cleanup())
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="New session started. Memory consolidation in progress.")
+                                  content=content)
         if cmd == "/help":
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
                                   content="🐈 nanobot commands:\n/new — Start a new conversation\n/help — Show available commands")
         
         if len(session.messages) > self.memory_window:
-            asyncio.create_task(self._consolidate_memory(session))
+            async def _consolidate_with_error_handling():
+                try:
+                    await self._consolidate_memory(session)
+                except Exception as e:
+                    logger.error(f"Background memory consolidation failed: {e}")
+
+            asyncio.create_task(_consolidate_with_error_handling())
 
         self._set_tool_context(msg.channel, msg.chat_id)
         initial_messages = self.context.build_messages(
