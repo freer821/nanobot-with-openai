@@ -178,6 +178,7 @@ class ProviderConfig(BaseModel):
 class ProvidersConfig(BaseModel):
     """Configuration for LLM providers."""
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
+    openai_codex: ProviderConfig = Field(default_factory=ProviderConfig)  # ChatGPT OAuth tokens
     openai: ProviderConfig = Field(default_factory=ProviderConfig)
     openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
     deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
@@ -240,11 +241,18 @@ class Config(BaseSettings):
         # Match by keyword (order follows PROVIDERS registry)
         for spec in PROVIDERS:
             p = getattr(self.providers, spec.name, None)
-            if p and any(kw in model_lower for kw in spec.keywords) and p.api_key:
+            if not (p and any(kw in model_lower for kw in spec.keywords)):
+                continue
+            if spec.requires_api_key:
+                if p.api_key:
+                    return p, spec.name
+            else:
                 return p, spec.name
 
         # Fallback: gateways first, then others (follows registry order)
         for spec in PROVIDERS:
+            if not spec.requires_api_key:
+                continue
             p = getattr(self.providers, spec.name, None)
             if p and p.api_key:
                 return p, spec.name

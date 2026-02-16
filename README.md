@@ -94,7 +94,9 @@ pip install nanobot-ai
 ## 🚀 Quick Start
 
 > [!TIP]
-> Set your API key in `~/.nanobot/config.json`.
+> Configure auth in `~/.nanobot/config.json`:
+> - API-key providers (OpenRouter/OpenAI/Anthropic/...)
+> - or OpenAI Codex via ChatGPT OAuth (`codex login`)
 > Get API keys: [OpenRouter](https://openrouter.ai/keys) (Global) · [DashScope](https://dashscope.console.aliyun.com) (Qwen) · [Brave Search](https://brave.com/search/api/) (optional, for web search)
 
 **1. Initialize**
@@ -128,6 +130,49 @@ nanobot agent -m "What is 2+2?"
 ```
 
 That's it! You have a working AI assistant in 2 minutes.
+
+## 🔐 OpenAI Codex (ChatGPT OAuth)
+
+Use ChatGPT plan authentication (OAuth) instead of API keys.
+
+**1. Sign in with Codex CLI**
+
+```bash
+codex login
+```
+
+**2. Configure** (`~/.nanobot/config.json`)
+
+```json
+{
+  "providers": {
+    "openaiCodex": {}
+  },
+  "agents": {
+    "defaults": {
+      "model": "gpt-5.3-codex"
+    }
+  }
+}
+```
+
+> [!TIP]
+> nanobot reads OAuth tokens from `~/.codex/auth.json` (created by `codex login`).
+
+**3. Chat**
+
+```bash
+nanobot agent -m "Review this repository and suggest improvements"
+```
+
+### Provider Auto-Selection
+
+Provider routing is model-driven and centralized in `nanobot/providers/factory.py`:
+
+- If model contains `codex` (for example `gpt-5.3-codex`) → use `openaiCodex` provider.
+- Otherwise → use LiteLLM provider path and require the matched provider API key in config.
+
+Use `nanobot status` to verify active model and provider auth status.
 
 ## 🖥️ Local Models (vLLM)
 
@@ -587,6 +632,7 @@ Config file: `~/.nanobot/config.json`
 |----------|---------|-------------|
 | `openrouter` | LLM (recommended, access to all models) | [openrouter.ai](https://openrouter.ai) |
 | `anthropic` | LLM (Claude direct) | [console.anthropic.com](https://console.anthropic.com) |
+| `openai_codex` | LLM (ChatGPT OAuth via Codex login, no API key required) | `codex login` |
 | `openai` | LLM (GPT direct) | [platform.openai.com](https://platform.openai.com) |
 | `deepseek` | LLM (DeepSeek direct) | [platform.deepseek.com](https://platform.deepseek.com) |
 | `groq` | LLM + **Voice transcription** (Whisper) | [console.groq.com](https://console.groq.com) |
@@ -600,8 +646,9 @@ Config file: `~/.nanobot/config.json`
 <details>
 <summary><b>Adding a New Provider (Developer Guide)</b></summary>
 
-nanobot uses a **Provider Registry** (`nanobot/providers/registry.py`) as the single source of truth.
-Adding a new provider only takes **2 steps** — no if-elif chains to touch.
+nanobot uses a **Provider Registry** (`nanobot/providers/registry.py`) plus shared selection logic in `nanobot/providers/factory.py`.
+
+For a **LiteLLM-based provider**, adding a new provider only takes **2 steps** — no if-elif chains to touch.
 
 **Step 1.** Add a `ProviderSpec` entry to `PROVIDERS` in `nanobot/providers/registry.py`:
 
@@ -626,6 +673,12 @@ class ProvidersConfig(BaseModel):
 
 That's it! Environment variables, model prefixing, config matching, and `nanobot status` display will all work automatically.
 
+For a **custom provider** (non-LiteLLM, OAuth/special API contract like `openai_codex`):
+
+1. Add registry metadata in `nanobot/providers/registry.py` (set `requires_api_key=False` if applicable).
+2. Implement provider class under `nanobot/providers/`.
+3. Wire selection in `nanobot/providers/factory.py`.
+
 **Common `ProviderSpec` options:**
 
 | Field | Description | Example |
@@ -635,6 +688,7 @@ That's it! Environment variables, model prefixing, config matching, and `nanobot
 | `env_extras` | Additional env vars to set | `(("ZHIPUAI_API_KEY", "{api_key}"),)` |
 | `model_overrides` | Per-model parameter overrides | `(("kimi-k2.5", {"temperature": 1.0}),)` |
 | `is_gateway` | Can route any model (like OpenRouter) | `True` |
+| `requires_api_key` | Whether this provider requires config apiKey | `False` for OAuth-backed providers |
 | `detect_by_key_prefix` | Detect gateway by API key prefix | `"sk-or-"` |
 | `detect_by_base_keyword` | Detect gateway by API base URL | `"openrouter"` |
 | `strip_model_prefix` | Strip existing prefix before re-prefixing | `True` (for AiHubMix) |

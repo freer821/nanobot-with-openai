@@ -30,6 +30,7 @@ class ProviderSpec:
     keywords: tuple[str, ...]       # model-name keywords for matching (lowercase)
     env_key: str                    # LiteLLM env var, e.g. "DASHSCOPE_API_KEY"
     display_name: str = ""          # shown in `nanobot status`
+    requires_api_key: bool = True   # False for providers authenticated another way
 
     # model prefixing
     litellm_prefix: str = ""                 # "dashscope" → model becomes "dashscope/{model}"
@@ -119,6 +120,25 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_key_prefix="",
         detect_by_base_keyword="",
         default_api_base="",
+        strip_model_prefix=False,
+        model_overrides=(),
+    ),
+
+    # OpenAI Codex (ChatGPT OAuth): backed by `~/.codex/auth.json` tokens.
+    ProviderSpec(
+        name="openai_codex",
+        keywords=("codex",),
+        env_key="OPENAI_API_KEY",
+        display_name="OpenAI Codex",
+        requires_api_key=False,
+        litellm_prefix="",
+        skip_prefixes=(),
+        env_extras=(),
+        is_gateway=False,
+        is_local=False,
+        detect_by_key_prefix="",
+        detect_by_base_keyword="",
+        default_api_base="https://chatgpt.com/backend-api/codex",
         strip_model_prefix=False,
         model_overrides=(),
     ),

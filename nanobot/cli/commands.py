@@ -300,21 +300,14 @@ This file stores important information that should persist across sessions.
 
 
 def _make_provider(config):
-    """Create LiteLLMProvider from config. Exits if no API key found."""
-    from nanobot.providers.litellm_provider import LiteLLMProvider
-    p = config.get_provider()
-    model = config.agents.defaults.model
-    if not (p and p.api_key) and not model.startswith("bedrock/"):
-        console.print("[red]Error: No API key configured.[/red]")
-        console.print("Set one in ~/.nanobot/config.json under providers section")
+    """Create provider from config. Exits if required auth is not configured."""
+    from nanobot.providers.factory import ProviderInitError, create_provider
+
+    try:
+        return create_provider(config, model=config.agents.defaults.model)
+    except ProviderInitError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(1)
-    return LiteLLMProvider(
-        api_key=p.api_key if p else None,
-        api_base=config.get_api_base(),
-        default_model=model,
-        extra_headers=p.extra_headers if p else None,
-        provider_name=config.get_provider_name(),
-    )
 
 
 # ============================================================================
@@ -866,6 +859,16 @@ def status():
         for spec in PROVIDERS:
             p = getattr(config.providers, spec.name, None)
             if p is None:
+                continue
+            if spec.name == "openai_codex":
+                from nanobot.providers.openai_codex_provider import OpenAICodexAuthStore
+
+                auth_ready = bool(p.api_key) or OpenAICodexAuthStore().has_auth()
+                if auth_ready:
+                    source = "bearer token" if p.api_key else "~/.codex/auth.json"
+                    console.print(f"{spec.label}: [green]✓ {source}[/green]")
+                else:
+                    console.print(f"{spec.label}: [dim]not set (run `codex login`)[/dim]")
                 continue
             if spec.is_local:
                 # Local deployments show api_base instead of api_key
